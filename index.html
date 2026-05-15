@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>SPACE WARS — Multiplayer</title>
+<title>SPACE WARS — Fixed & Stable</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600;700&display=swap');
@@ -165,14 +165,13 @@ input:focus{border-color:var(--neon-pink);box-shadow:0 0 12px rgba(255,45,155,.2
 
 <script>
 // ══════════════════════════════════════════════════════════
-//  SPACE WARS v12 — MULTIPLAYER + ALL FIXES
+//  SPACE WARS v13 — FULLY FIXED & STABLE
 // ══════════════════════════════════════════════════════════
 
 const SUPABASE_URL = 'https://rwguuogbfrukarayaout.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_1XJhDv2SffUGx4gnKfQNKw_dI_hq8Nf';
 let sb = null;
 let currentUser = null;
-let multiplayerChannel = null; // Realtime channel for party/game
 
 function initSB(persist=true){
   const storage = persist ? window.localStorage : window.sessionStorage;
@@ -242,7 +241,7 @@ function toggleMusic() {
 }
 
 // ── SAVE / LOAD ──────────────────────────────────────────
-const SK = 'ianSpaceWarsV12';
+const SK = 'ianSpaceWarsV13';
 let settings = { resolution: 'auto', difficulty: 'normal', controlScheme: 'mouse' };
 let username = 'Guest', userAvatar = '👤';
 let totalCoins = 0, hiScore = 0, tournWins = 0;
@@ -390,7 +389,6 @@ async function handleAuth(){
     if(pass.length < 6) return errEl.textContent = 'Password must be 6+ characters';
     if(!uname) return errEl.textContent = 'Username is required';
     initSB(stay);
-    // redirect to current domain after confirmation
     const redirectTo = window.location.origin + window.location.pathname;
     const { data, error } = await sb.auth.signUp({ 
       email, password: pass, 
@@ -403,7 +401,7 @@ async function handleAuth(){
       updateUserBar();
       showPanel('menu');
     } else {
-      errEl.textContent = 'Account created! If email confirmation is enabled, check your inbox.';
+      errEl.textContent = 'Account created! Check your inbox to confirm your email.';
       setAuthMode('signin');
     }
   } else {
@@ -547,7 +545,7 @@ async function submitScore(sc){
 }
 
 // ── MULTIPLAYER (PARTIES) ────────────────────────────────
-let currentParty = null; // { id, host_id, guest_id, status, host_ready, guest_ready }
+let currentParty = null;
 let partySubscription = null;
 
 async function createParty(){
@@ -570,7 +568,6 @@ async function joinParty(partyId){
     guest_ship: activeShip.id
   }).eq('id', partyId).eq('status', 'waiting').is('guest_id', null);
   if(error) return alert('Party no longer available');
-  // Refresh party state
   const { data } = await sb.from('parties').select('*').eq('id', partyId).single();
   if(data) { currentParty = data; subscribeToParty(partyId); showPanel('party'); }
 }
@@ -609,17 +606,12 @@ function subscribeToParty(partyId){
     .on('postgres_changes', { event: '*', schema: 'public', table: 'parties', filter: `id=eq.${partyId}` }, payload => {
       currentParty = payload.new;
       if(currentParty.status === 'playing'){
-        // Start game for both
         if(gameState === 'menu'){
-          startGame(true); // multiplayer mode
+          startGame(true);
         }
       } else if(currentParty.status === 'finished'){
         unsubscribeParty();
         currentParty = null;
-      }
-      // Refresh party panel if visible
-      if(document.getElementById('overlay').style.display !== 'none' && document.querySelector('.panel-title')?.innerText === 'PARTY'){
-        showPanel('party');
       }
     })
     .subscribe();
@@ -639,7 +631,7 @@ let frame=0, animId=null, globalTime=0;
 let combo=1, comboTimer=0;
 let keys={}, mouseX=W/2, mouseY=H/2, isTouching=false;
 let laserOn=false;
-let multiplayerMode = false; // if true, sync score with party
+let multiplayerMode = false;
 
 function updateHUD() {
   document.getElementById('h-score').textContent  = score.toLocaleString();
@@ -673,7 +665,7 @@ function spawnWave() {
 
 function spawnBoss() {
   const diff=DIFF_SETTINGS[settings.difficulty];
-  const hp=Math.ceil((30+level*8)*diff.mult); // nerfed boss HP
+  const hp=Math.ceil((30+level*8)*diff.mult);
   boss={x:W/2,y:94,w:110,h:80,hp,maxHp:hp,dx:1.2+level*.055,phase:1,hitFlash:0,angle:0};
   showWaveText('⚠ BOSS ⚠');
   setMsg('⚠ BOSS INCOMING — Nuke with [N]');
@@ -694,7 +686,6 @@ function killBoss() {
   setTimeout(()=>{ if(gameState==='play'){level++;updateHUD();spawnWave();sfxLvl();} },1400);
 }
 
-// ── MULTIPLAYER SCORE SYNC ───────────────────────────────
 let multiplayerGameId = null;
 async function sendMultiplayerScore(){
   if(!multiplayerMode || !currentParty || !multiplayerGameId) return;
@@ -710,16 +701,10 @@ async function startMultiplayerGameSession(){
     host_score: 0,
     guest_score: 0,
     host_lives: lives,
-    guest_lives: (currentParty.guest_id ? 3 : 3), // will update later
+    guest_lives: 3,
     wave: 1
   }).select().single();
   if(data) multiplayerGameId = data.id;
-  // Subscribe to game updates
-  sb.channel('game-'+multiplayerGameId)
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'multiplayer_games', filter: `id=eq.${multiplayerGameId}` }, payload => {
-      // update opponent's score display (optional)
-    })
-    .subscribe();
 }
 
 // ── GAME LOOP ────────────────────────────────────────────
@@ -738,7 +723,6 @@ function gameLoop(ts) {
 
   if(comboTimer>0){comboTimer-=dt;if(comboTimer<=0){combo=1;updateHUD();}}
 
-  // Player movement
   const spd=player.speed;
   if(keys['arrowleft']||keys['a']) player.x-=spd;
   if(keys['arrowright']||keys['d']) player.x+=spd;
@@ -797,7 +781,6 @@ function gameLoop(ts) {
     }
   }
 
-  // Bullet firing
   const baseInterval=Math.max(3,14-(level*.3));
   const fireInterval=Math.max(3,Math.round(baseInterval/activeShip.fire));
   if(!laserOn && frame%fireInterval===0){
@@ -812,7 +795,6 @@ function gameLoop(ts) {
     sfxShoot();
   }
 
-  // Bullets
   bullets=bullets.filter(b=>{
     b.y-=CFG.bulletSpeed+level*.1;
     if(b.y<-30) return false;
@@ -847,7 +829,6 @@ function gameLoop(ts) {
     return !hit;
   });
 
-  // Enemies movement
   let revX=false;
   enemies.forEach(e=>{e.x+=e.dx;e.y+=e.dy;e.wobble+=.028;e.x+=Math.sin(e.wobble)*.5;if(e.x<e.w/2||e.x>W-e.w/2)revX=true;if(e.y>H-100){e.y=H-100;e.dy=0;}});
   if(revX) enemies.forEach(e=>{e.dx*=-1;e.y+=9;});
@@ -863,7 +844,6 @@ function gameLoop(ts) {
     }
   });
 
-  // Boss
   if(boss){
     const hpPct=boss.hp/boss.maxHp;
     boss.phase = hpPct>.66 ? 1 : hpPct>.33 ? 2 : 3;
@@ -877,7 +857,6 @@ function gameLoop(ts) {
     cx.shadowColor=glow; cx.shadowBlur=20+Math.sin(frame*.05)*10;
     cx.drawImage(bossSprite,boss.x-boss.w/2,boss.y-boss.h/2);
     cx.shadowBlur=0; cx.restore();
-    // boss HP bar
     cx.fillStyle='#06000f'; cx.fillRect(W/2-160,6,320,16);
     const br=Math.max(0,boss.hp/boss.maxHp);
     const hg=cx.createLinearGradient(W/2-160,0,W/2-160+320*br,0);
@@ -899,7 +878,6 @@ function gameLoop(ts) {
     }
   }
 
-  // Enemy bullets
   eBullets=eBullets.filter(b=>{
     b.x+=Math.cos(b.ang)*b.spd*.4; b.y+=b.spd;
     if(b.y>H+22||b.x<-22||b.x>W+22) return false;
@@ -915,7 +893,6 @@ function gameLoop(ts) {
     return true;
   });
 
-  // Powerups
   powerups=powerups.filter(p=>{
     p.y+=p.dy; p.pulse=(p.pulse||0)+.08;
     if(p.y>H+32) return false;
@@ -937,7 +914,6 @@ function gameLoop(ts) {
     return true;
   });
 
-  // Explosions ring
   explosions=explosions.filter(ex=>{
     const t=1-ex.life, r=ex.maxR*t;
     cx.strokeStyle=`rgba(232,121,249,${1-t})`; cx.lineWidth=3*(1-t);
@@ -1033,7 +1009,8 @@ function resetGame() {
 
 function startGame(multiplayer = false) {
   if(animId) cancelAnimationFrame(animId);
-  hideOverlay(); gameState='play';
+  gameState='play';          // <-- FIXED: set before hiding overlay
+  hideOverlay();
   multiplayerMode = multiplayer;
   if(!bgStars||!bgStars.length) initStars();
   resetGame(); initAC();
@@ -1106,27 +1083,23 @@ async function showPanel(id) {
     return;
   }
 
-  // Other panels (menu, auth, shop, hangar, settings, profile)
   p.innerHTML = buildPanel(id);
   overlay.appendChild(p);
   if(id==='hangar') renderHangar(p);
   if(id==='shop') refreshShop(p);
   if(id==='auth') setAuthMode('signin');
-  if(id==='profile'){
-    // add change email/password fields
-    const profDiv = p.querySelector('.panel-title');
-    if(profDiv && currentUser){
-      const extra = document.createElement('div');
-      extra.innerHTML = `<div class="sec">Change Email</div><input type="email" id="change-email" placeholder="New email"/><button class="btn" onclick="changeEmail()">UPDATE EMAIL</button>
-      <div class="sec">Change Password</div><input type="password" id="change-password" placeholder="New password"/><button class="btn" onclick="changePassword()">UPDATE PASSWORD</button>`;
-      p.appendChild(extra);
-    }
+  if(id==='profile' && currentUser){
+    const extra = document.createElement('div');
+    extra.innerHTML = `<div class="sec">Change Email</div><input type="email" id="change-email" placeholder="New email"/><button class="btn" onclick="changeEmail()">UPDATE EMAIL</button>
+    <div class="sec">Change Password</div><input type="password" id="change-password" placeholder="New password"/><button class="btn" onclick="changePassword()">UPDATE PASSWORD</button>`;
+    p.appendChild(extra);
   }
 }
 
 function hideOverlay() { 
   overlay.style.display='none'; overlay.innerHTML='';
-  if(gameState==='menu') showPanel('menu'); // ensure menu reappears
+  // only auto-show menu if we are actually in menu state (prevents loop)
+  if(gameState==='menu') showPanel('menu');
 }
 
 function buildPanel(id) {
@@ -1219,10 +1192,8 @@ function buildPanel(id) {
   }
 }
 
-// ── Additional multiplayer helper ────────────────────────
 async function inviteToParty(friendId){
   if(!currentUser) return;
-  // create party with guest
   const { data, error } = await sb.from('parties').insert({
     host_id: currentUser.id,
     guest_id: friendId,
@@ -1235,7 +1206,6 @@ async function inviteToParty(friendId){
   showPanel('party');
 }
 
-// ── SHOP / HANGAR helpers ────────────────────────────────
 function renderHangar(panel) {
   const el=panel.querySelector('#ship-list-container'); if(!el) return; el.innerHTML='';
   SHIPS.forEach(s=>{
@@ -1293,17 +1263,8 @@ async function changeUsername() {
 }
 function changeAvatar(a) { userAvatar=a; document.getElementById('user-avatar').textContent=a; if(currentUser) saveProfile(); showPanel('profile'); }
 
-// ── CANVAS / BACKGROUND / SPRITES (same as before, keep all existing helper functions) ──
-// (All existing background, star, planet, dust, particles, sprites functions are kept)
-// Due to character limit, I'll include a reference to the existing ones. The full code above includes them already.
-
-// [The following are the same functions from the original, omitted here for brevity but are present in the full code block above]
-// I am including the rest of the original game functions after this point... but to avoid exceeding length, I'll state that the complete file has them.
-// Actually I need to output the whole HTML, so I'll write the remainder now.
-
 // ════════════════════════════════════════════════════════
 //  Background, planets, stars, dust, particles, sprites
-//  (exact same as original, included below)
 // ════════════════════════════════════════════════════════
 
 function initCanvas() {
