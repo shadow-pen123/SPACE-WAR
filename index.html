@@ -167,16 +167,17 @@ input[type=text]:focus,input[type=password]:focus{border-color:var(--neon-pink);
 
 <script>
 // ══════════════════════════════════════════════════════════
-//  SPACE WARS v11 — SUPABASE EDITION by IAN
+//  SPACE WARS v11.1 — FULLY FIXED SUPABASE EDITION
 //  Real auth, real cloud saves, real friends, real LB.
 // ══════════════════════════════════════════════════════════
 
-// [SUPABASE] ───────────────────────────────────────────────
+// [SUPABASE] — if sign-in fails, swap SUPABASE_KEY with your
+// actual "anon public" JWT from Dashboard → API
+// ──────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://rwguuogbfrukarayaout.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_1XJhDv2SffUGx4gnKfQNKw_dI_hq8Nf'; // Replace with your actual anon key from Dashboard > API if this format fails
+const SUPABASE_KEY = 'sb_publishable_1XJhDv2SffUGx4gnKfQNKw_dI_hq8Nf';
 let sb = null;
 let currentUser = null;
-let authReady = false;
 
 function initSB(persist=true){
   const storage = persist ? window.localStorage : window.sessionStorage;
@@ -191,7 +192,7 @@ const cv = document.getElementById('cv');
 const cx = cv.getContext('2d');
 let W, H;
 
-// [CONFIG] — tweak game feel here ──────────────────────────
+// [CONFIG] ─────────────────────────────────────────────────
 const CFG = {
   bulletSpeed: 12,
   bulletW: 5, bulletH: 22,
@@ -249,8 +250,8 @@ function toggleMusic() {
 // [SAVE / LOAD] ────────────────────────────────────────────
 const SK = 'ianSpaceWarsV11';
 let settings = { resolution: 'auto', difficulty: 'normal', controlScheme: 'mouse' };
-
 let username = 'Guest', userAvatar = '👤';
+let totalCoins = 0, hiScore = 0, tournWins = 0;
 
 function updateUserBar(){
   document.getElementById('user-name').textContent = username;
@@ -260,8 +261,23 @@ function updateUserBar(){
 
 async function loadProfile(){
   if(!currentUser) return;
-  const { data, error } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
-  if(error || !data){ console.error('Profile load error:', error); return; }
+  let { data, error } = await sb.from('profiles').select('*').eq('id', currentUser.id).single();
+  if(error || !data){
+    const uname = currentUser.user_metadata?.username || currentUser.email?.split('@')[0] || 'Pilot';
+    const { data: newData, error: insertErr } = await sb.from('profiles').insert({
+      id: currentUser.id,
+      username: uname,
+      avatar: '🚀',
+      coins: 0,
+      hi_score: 0,
+      wins: 0,
+      owned_ships: ['viper','ian'],
+      active_ship: 'viper',
+      upgrades: { triple:false, laser:false, shield:false, speed:false, bombs:0, nukes:0, lives:0 }
+    }).select().single();
+    if(insertErr){ console.error('Profile create error:', insertErr); return; }
+    data = newData;
+  }
   totalCoins = data.coins || 0;
   hiScore    = data.hi_score || 0;
   tournWins  = data.wins || 0;
@@ -270,7 +286,6 @@ async function loadProfile(){
   if(data.owned_ships && Array.isArray(data.owned_ships)){
     SHIPS.forEach(s => s.owned = data.owned_ships.includes(s.id));
   }
-  // Ensure defaults
   ['viper','ian'].forEach(id => { const s=SHIPS.find(x=>x.id===id); if(s) s.owned=true; });
   if(data.active_ship){
     const s = SHIPS.find(x => x.id === data.active_ship);
@@ -299,7 +314,7 @@ async function saveProfile(){
     updated_at: new Date().toISOString()
   }).eq('id', currentUser.id);
   if(error) console.error('Supabase save error:', error);
-  else showSaveInd(currentUser ? '☁️ SYNCED' : '💾 SAVED');
+  else showSaveInd('☁️ SYNCED');
 }
 
 function localSave(){
@@ -378,7 +393,7 @@ async function handleAuth(){
     const confirm = document.getElementById('au-confirm').value;
     const uname   = document.getElementById('au-user').value.trim();
     if(pass!==confirm) return errEl.textContent = 'Passwords do not match';
-    if(pass.length<<6) return errEl.textContent = 'Password must be 6+ characters';
+    if(pass.length < 6) return errEl.textContent = 'Password must be 6+ characters';
     if(!uname) return errEl.textContent = 'Username is required';
     initSB(stay);
     const { data, error } = await sb.auth.signUp({ email, password: pass, options: { data: { username: uname } } });
@@ -407,18 +422,13 @@ async function logOut(){
   await sb.auth.signOut();
   currentUser = null;
   resetGuestData();
-  updateUserBar();
-  if(animId) cancelAnimationFrame(animId);
-  gameState='idle'; bgMusic.pause();
   showPanel('auth');
 }
 
 function playAsGuest(){
   currentUser = null;
   resetGuestData();
-  updateUserBar();
   showPanel('menu');
-  menuLoop(performance.now());
 }
 
 async function loadSession(){
@@ -429,7 +439,6 @@ async function loadSession(){
   } else {
     currentUser = null;
   }
-  authReady = true;
   updateUserBar();
   if(!currentUser) showPanel('auth');
   else showPanel('menu');
@@ -437,7 +446,7 @@ async function loadSession(){
 }
 
 sb.auth.onAuthStateChange((event, session)=>{
-  if(event==='SIGNED_IN'){ currentUser = session.user; loadProfile().then(()=>{ updateUserBar(); }); }
+  if(event==='SIGNED_IN'){ currentUser = session.user; loadProfile().then(()=>updateUserBar()); }
   if(event==='SIGNED_OUT'){ currentUser = null; resetGuestData(); updateUserBar(); }
   if(event==='TOKEN_REFRESHED'){ currentUser = session.user; }
 });
@@ -476,8 +485,6 @@ const UP_LIST = [
 ];
 
 // [FRIENDS & LEADERBOARD] ──────────────────────────────────
-let totalCoins = 0, hiScore = 0, tournWins = 0;
-
 async function loadFriends(){
   if(!currentUser) return [];
   const { data, error } = await sb.from('friends').select('friend_id').eq('user_id', currentUser.id);
@@ -537,10 +544,6 @@ function initCanvas() {
     else { W=wr.clientWidth; H=W/ar; }
   }
   cv.width=W; cv.height=H; cv.style.width=W+'px'; cv.style.height=H+'px';
-  if(player){
-    player.x = Math.max(player.w/2, Math.min(W-player.w/2, player.x));
-    player.y = Math.max(H*.2, Math.min(H-player.h/2, player.y));
-  }
 }
 initCanvas();
 window.addEventListener('resize', () => { initCanvas(); rebuildBg(); initStars(); initPlanets(); initSpaceDust(); });
@@ -588,7 +591,7 @@ function drawPlanet(p, time) {
   bg.addColorStop(0,`hsl(${p.hue},60%,55%)`); bg.addColorStop(.5,`hsl(${p.hue},70%,30%)`); bg.addColorStop(1,`hsl(${p.hue},80%,12%)`);
   cx.fillStyle=bg; cx.beginPath(); cx.arc(p.x,p.y,p.r,0,Math.PI*2); cx.fill();
   cx.fillStyle=`hsla(${p.hue},50%,40%,.25)`;
-  for(let i=0;i<<5;i++){const sx=p.x+Math.cos(time*.0003+i*1.3)*p.r*.5,sy=p.y+Math.sin(time*.0004+i*1.7)*p.r*.4,sr=p.r*(.12+Math.sin(i*2.1)*.08);cx.beginPath();cx.arc(sx,sy,sr,0,Math.PI*2);cx.fill();}
+  for(let i=0; i<<5; i++){const sx=p.x+Math.cos(time*.0003+i*1.3)*p.r*.5,sy=p.y+Math.sin(time*.0004+i*1.7)*p.r*.4,sr=p.r*(.12+Math.sin(i*2.1)*.08);cx.beginPath();cx.arc(sx,sy,sr,0,Math.PI*2);cx.fill();}
   if (p.hasRing) {
     cx.save(); cx.translate(p.x,p.y); cx.rotate(p.ringAngle);
     cx.strokeStyle=`hsla(${p.hue},70%,60%,.45)`; cx.lineWidth=p.r*.14; cx.beginPath(); cx.ellipse(0,0,p.r*1.5,p.r*.35,0,0,Math.PI*2); cx.stroke();
@@ -612,7 +615,7 @@ function spawnShootingStar() {
 }
 function updateShootingStars(dt) {
   shootingStars=shootingStars.filter(s=>{s.life-=dt;s.x+=Math.cos(s.angle)*s.speed;s.y+=Math.sin(s.angle)*s.speed;return s.life>0&&s.x>-100&&s.x<W+100&&s.y>-100&&s.y<H+100;});
-  if(Math.random()<<.008&&shootingStars.length<<3) spawnShootingStar();
+  if(Math.random() < 0.008 && shootingStars.length < 3) spawnShootingStar();
 }
 function drawShootingStars() {
   shootingStars.forEach(s=>{
@@ -673,7 +676,7 @@ function boom(x, y, count=20, color='#e879f9') {
 function spawnDebris(x, y, count=8) {
   for(let i=0;i<count;i++){
     const a=Math.random()*Math.PI*2, sp=2+Math.random()*5;
-    debris.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:.5+Math.random()*.8,maxLife:.5+Math.random()*.8,size:2+Math.random()*5,rot:Math.random()*Math.PI*2,rotSpd:(Math.random()-.5)*.3,color:Math.random()<<.5?'#a78bfa':'#7c3aed'});
+    debris.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:.5+Math.random()*.8,maxLife:.5+Math.random()*.8,size:2+Math.random()*5,rot:Math.random()*Math.PI*2,rotSpd:(Math.random()-.5)*.3,color:Math.random() < .5 ? '#a78bfa' : '#7c3aed'});
   }
 }
 
@@ -740,8 +743,8 @@ function drawWaveText(dt) {
   if(waveTextLife<=0) return;
   waveTextLife -= dt;
   const prog = 1 - waveTextLife/CFG.waveTextDuration;
-  const a = prog<<.15 ? prog/.15 : waveTextLife<<.5 ? waveTextLife/.5 : 1;
-  const scale = prog<<.15 ? .7+(prog/.15)*.3 : 1;
+  const a = prog < .15 ? prog/.15 : waveTextLife < .5 ? waveTextLife/.5 : 1;
+  const scale = prog < .15 ? .7+(prog/.15)*.3 : 1;
   cx.save(); cx.globalAlpha=a; cx.translate(W/2,H/2);
   cx.scale(scale,scale);
   const gr=cx.createLinearGradient(-200,0,200,0);
@@ -825,7 +828,7 @@ function spawnWave() {
   const diff=DIFF_SETTINGS[settings.difficulty];
   const cols=Math.min(5+Math.floor(level/2),10), rows=Math.min(2+Math.floor(level/3),5);
   const gap=Math.floor((W-80)/cols);
-  for(let r=0;r<<rows;r++) for(let c=0;c<<cols;c++) {
+  for(let r=0; r<<rows; r++) for(let c=0; c<<cols; c++) {
     enemies.push({
       x:40+c*gap+gap/2, y:26+r*52, w:50, h:44,
       hp:Math.ceil((1+Math.floor(level/3))*diff.mult),
@@ -868,7 +871,7 @@ function gameLoop(ts) {
   frame++;
   const diff=DIFF_SETTINGS[settings.difficulty];
 
-  if(screenShake>0){shakeX=(Math.random()-.5)*screenShake;shakeY=(Math.random()-.5)*screenShake;screenShake*=.82;if(screenShake<<.3){screenShake=0;shakeX=0;shakeY=0;}}
+  if(screenShake>0){shakeX=(Math.random()-.5)*screenShake;shakeY=(Math.random()-.5)*screenShake;screenShake*=.82;if(screenShake < .3){screenShake=0;shakeX=0;shakeY=0;}}
 
   cx.save(); cx.translate(shakeX,shakeY);
   renderBackground(ts);
@@ -892,7 +895,7 @@ function gameLoop(ts) {
   drawEngineTrail();
 
   // ── PLAYER DRAW ──────────────────────────────────────
-  const pinv=(player.invincible>0)?(frame%6<<3?.1:1):1;
+  const pinv=(player.invincible>0)?(frame%6 < 3 ? .1 : 1):1;
   cx.save(); cx.globalAlpha=pinv; cx.drawImage(playerSprite,player.x-30,player.y-33); cx.restore();
 
   // Shield ring
@@ -927,7 +930,7 @@ function gameLoop(ts) {
           addFloat(e.x,e.y-20,'+'+pts,'#00ffe7');
           combo=Math.min(combo+1,CFG.comboMax); comboTimer=CFG.comboWindow;
           if(combo>=3) sfxCombo(combo); else sfxBoom();
-          if(Math.random()<<CFG.enemyDropRate) dropPowerup(e.x,e.y);
+          if(Math.random() < CFG.enemyDropRate) dropPowerup(e.x,e.y);
           updateHUD(); return false;
         } return true;
       } return true;
@@ -975,7 +978,7 @@ function gameLoop(ts) {
           combo=Math.min(combo+1,CFG.comboMax); comboTimer=CFG.comboWindow;
           if(combo>=3) sfxCombo(combo); else sfxBoom();
           if(combo>1) addFloat(e.x+20,e.y-40,'COMBO x'+combo,'#ff6d00');
-          if(Math.random()<<CFG.enemyDropRate) dropPowerup(e.x,e.y);
+          if(Math.random() < CFG.enemyDropRate) dropPowerup(e.x,e.y);
           updateHUD(); hit=true; return false;
         } hit=true; sfxHit(); return true;
       } return true;
@@ -1011,7 +1014,7 @@ function gameLoop(ts) {
     boss.phase = hpPct>.66 ? 1 : hpPct>.33 ? 2 : 3;
     const spd=(1.2+level*.055)*(1+(boss.phase-1)*.4);
     boss.x+=boss.dx*(boss.phase===3?1.5:1);
-    if(boss.x<<boss.w/2||boss.x>W-boss.w/2) boss.dx*=-1;
+    if(boss.x < boss.w/2 || boss.x > W-boss.w/2) boss.dx*=-1;
     boss.angle+=.02;
 
     cx.save();
@@ -1372,7 +1375,7 @@ function refreshShop(panel) {
 }
 
 function buyUp(id, cost) {
-  if(totalCoins<<cost) return;
+  if(totalCoins < cost) return;
   totalCoins-=cost;
   if(id==='bombs') ups.bombs++;
   else if(id==='nukes') ups.nukes++;
@@ -1402,10 +1405,10 @@ function changeAvatar(a) { userAvatar=a; document.getElementById('user-avatar').
 
 // [CONTROLS] ───────────────────────────────────────────────
 document.addEventListener('keydown', e => {
-  keys[e.key] = true;
-  if(e.key.length===1) keys[e.key.toLowerCase()] = true;
-  if(AC&&AC.state==='suspended') AC.resume();
   const k = e.key.toLowerCase();
+  keys[k] = true;
+  if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k)) e.preventDefault();
+  if(AC&&AC.state==='suspended') AC.resume();
   if(k==='escape'&&gameState==='play'){
     gameState='menu'; cancelAnimationFrame(animId); bgMusic.pause();
     showPanel('menu'); menuLoop(performance.now());
@@ -1414,8 +1417,7 @@ document.addEventListener('keydown', e => {
   if(k==='n'&&gameState==='play') useNuke();
 });
 document.addEventListener('keyup', e => {
-  keys[e.key] = false;
-  if(e.key.length===1) keys[e.key.toLowerCase()] = false;
+  keys[e.key.toLowerCase()] = false;
 });
 
 cv.addEventListener('mousemove', e => {
@@ -1449,15 +1451,6 @@ setInterval(()=>{
     else localSave();
   }
 }, 30000);
-
-// ══════════════════════════════════════════════════════════
-//  HOW TO ADD NEW FEATURES:
-//  • New ship:    Add entry to SHIPS array
-//  • New upgrade: Add to UP_LIST + handle in buyUp/applyPowerup
-//  • New powerup: Add type to dropPowerup, icon in powerups render, effect in applyPowerup
-//  • New enemy:   Add entry and rendering in spawnWave
-//  • Tune values: Edit CFG or DIFF_SETTINGS at the top
-// ══════════════════════════════════════════════════════════
 </script>
 </body>
 </html>
